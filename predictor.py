@@ -24,7 +24,7 @@ def classify_file(file):
     classes = ['run', 'walk', 'stand', 'sit', 'sit-to-stand', 'stand-to-sit', 
         'stair-up', 'stair-down', 'jump-one-leg', 'jump-two-leg', 'curve-left-step', 
         'curve-right-step', 'curve-left-spin-Lfirst', 'curve-left-spin-Rfirst', 
-        'curve-right-spin_Lfirst', 'curve-right-spin-Rfirst', 'lateral-shuffle-left', 
+        'curve-right-spin-Lfirst', 'curve-right-spin-Rfirst', 'lateral-shuffle-left', 
         'lateral-shuffle-right','v-cut-left-Lfirst', 'v-cut-left-Rfirst', 'v-cut-right-Lfirst', 'v-cut-right-Rfirst']
     #print("Reading file "+data_path+file)
     df = pd.read_csv(data_path+file)
@@ -33,6 +33,9 @@ def classify_file(file):
 
 
 def classify_movement(array):
+    """
+    This is the heart of the algorithm.
+    """
     prob = np.random.rand(22)
     print(prob)
     return prob
