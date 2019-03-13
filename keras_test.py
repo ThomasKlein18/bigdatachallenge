@@ -12,7 +12,7 @@ from preprocessing import *
 batch_size = 32
 
 print('Loading data...')
-(x_train, y_train), (x_test, y_test) = create_subsequence_dataset(data_path+"train.csv", sub_size=80)
+(x_train, y_train), (x_test, y_test) = create_median_filtered_dataset(data_path+"train.csv", 100)#create_subsequence_dataset(data_path+"train.csv", sub_size=80)
 print(len(x_train), 'train sequences')
 print(len(x_test), 'test sequences')
 
@@ -22,7 +22,9 @@ print("y_train shape:", y_train.shape)
 
 print('Build model...')
 model = Sequential()
-model.add(LSTM(50, input_shape=(None,19)))
+model.add(Embedding(1000, 19, mask_zero = True))
+model.add(LSTM(50, return_sequences=True, input_shape=(None)))
+model.add(LSTM(50))
 model.add(Dense(22, activation='softmax'))
 
 # try using different optimizers and different optimizer configs

@@ -72,11 +72,38 @@ def slice_that_shit(dataset_X, dataset_Y, sub_size):
     return np.array(X), np.array(Y)
 
 def create_subsequence_dataset(file,sub_size):
-    (train_X, train_Y), (test_X, test_Y) = create_dataset(file, 1, False) # yields [6321, 802, 19]
+    (train_X, train_Y), (test_X, test_Y) = create_dataset(file, 1, False) # yields [6321, 8020, 19]
     train_X, train_Y = slice_that_shit(train_X, train_Y, sub_size) # should yield [56.000, 10, 19]
     #test_X, test_Y = slice_that_shit(test_X, test_Y, sub_size)
     return (train_X, train_Y), (test_X, test_Y)
 
+def create_median_filtered_dataset(file, chunk_size=100):
+    (train_X, train_Y), (test_X, test_Y) = create_dataset(file, 1, False) # yields [6321, 8020, 19]
+    print("Data Dimensions Sanity Check:")
+    print("x_train shape should be [a lot, 8020, 19]:",train_X.shape)
+    print("y_train shape should be [a lot]",train_Y.shape)
+    print("x_test shape should be [not as much, 8020, 19]:", test_X.shape)
+    print("y_test shape should be [not as much]",test_Y.shape)
+
+    def median_filter(dataset):
+        new_dataset = []
+        for measurement in dataset:
+            # measurement is one file, [8020,19]
+            new_series = []
+            for i in np.arange(0,measurement.shape[0],chunk_size):
+                new_series.append(np.median(measurement[i:i+chunk_size,:], axis=0))
+            new_dataset.append(np.array(new_series))
+        return np.array(new_dataset)
+
+    train_X = median_filter(train_X)
+    test_X = median_filter(test_X)
+
+    print("Data Dimensions Sanity Check:")
+    print("x_train shape should be [a lot, 8020, 19]:",train_X.shape)
+    print("x_test shape should be [not as much, 8020, 19]:", test_X.shape)
+
+    return (train_X, train_Y), (test_X, test_Y)
 
 if __name__ == "__main__":
-    create_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Bewegungsdaten/train.csv", skip=1)
+    #create_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Bewegungsdaten/train.csv", skip=1)
+    create_median_filtered_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Bewegungsdaten/train.csv",100)
