@@ -37,11 +37,17 @@ data_path = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Be
 # --------- utility functions ---------- #
 
 def smooth(data, windowsize, std):
+    """
+    Smoothes a 1d-data array with a gaussian of given size and sigma
+    """
     kernel = signal.gaussian(windowsize, std=std)
     kernel /= np.sum(kernel)
     return np.convolve(data, kernel, 'valid')
 
 def variance_filter(data, windowsize):
+    """
+    Calculates the local variance of a signal by evaluating a sliding window.
+    """
     half = windowsize//2
     res = np.zeros(data.shape[0]-windowsize)
     for i in range(half,len(data)-half):
@@ -52,12 +58,18 @@ def variance_filter(data, windowsize):
     return res / maxi
 
 def sample(data, num_samples):
+    """
+    Samples a 1d-signal num_samples times.
+    """
     samples = [int(sample) for sample in np.linspace(0, data.shape[0]-1, num_samples)]
     return data[samples]
     
 def smooth_extractor(data, num_samples):
     """
-    data = 1d-numpy array of length timestep:
+    Samples a signal after smoothing it.
+
+    data = 1d-numpy array of length timestep
+    num_samples = how many samples to extract
     """
     smoothed = smooth(data,200,50)
     smax = np.max(smoothed)
@@ -68,7 +80,10 @@ def smooth_extractor(data, num_samples):
 
 def variance_extractor(data, num_samples):
     """
+    Samples the local variance of a signal.
+
     data = 1d-numpy array of length timesteps
+    num_samples = how many samples to extract
     """
     var_data = smooth(variance_filter(data,windowsize=100),windowsize=100,std=25)
     return sample(var_data, num_samples)
@@ -76,8 +91,10 @@ def variance_extractor(data, num_samples):
 
 def recurrent_feature_extractor(data, num_samples):
     """
+    Extracts features from a 19-dimensional sequence.
+
     data = 2d-numpy array of shape [timesteps, sensors]
-    
+    num_samples = how many samples to extract
     """
     features = []
         
@@ -149,10 +166,33 @@ def split_dataset(file, train_name, test_name, percentage=10):
     tdf.columns = headers
     tdf.to_csv(test_name+".csv")
 
+def _float_feature(value):
+    """Returns a float_list from a float / double."""
+    return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
+
+def _int64_feature(value):
+    """Returns an int64_list from a bool / enum / int / uint."""
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+def serialize_example(featurelist, label):
+    """
+    Creates a tf.Example message from the list of features and the label, where
+    every element in the featurelist is actually a sequence=ndarray
+    """
+
+    feature = {}
+    for i in range(len(featurelist)):
+        feature['feature'+str(i)] = tf.train.Feature(float_list=tf.train.FloatList(value=list(featurelist[i])))
+        #_float_feature(featurelist[i])
+    feature['label'] = _int64_feature(label)
+
+    example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+    return example_proto.SerializeToString()
+
 
 def dataset_creator(in_file, outfile):
     """
-    
+    Creates a dataset (i.e. outfile.tfrecords) from in_file.csv
     """
     df = pd.read_csv(in_file)
     
@@ -168,9 +208,6 @@ def dataset_creator(in_file, outfile):
                 label = classes.index(row['Label'])
                 extracted_featurelist = recurrent_feature_extractor(data, 80)
 
-                # this is where the fun begins: extracted_featurelist is a 19-element-list of  np-arrays of length 80
-                # We need to get that into a tf.train.Example, which we can then serialize to string and 
-                # write to a tfrecords-file.
                 serialized_example = serialize_example(extracted_featurelist, label)
 
                 writer.write(serialized_example)
