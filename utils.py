@@ -52,10 +52,7 @@ def variance_filter(data, windowsize):
     res = np.zeros(data.shape[0]-windowsize)
     for i in range(half,len(data)-half):
         res[i-half] = np.std(data[i-half:i+half])
-    maxi = np.max(res)
-    if(maxi == 0):
-        maxi = 0.00001
-    return res / maxi
+    return res
 
 def sample(data, num_samples):
     """
@@ -64,30 +61,6 @@ def sample(data, num_samples):
     samples = [int(sample) for sample in np.linspace(0, data.shape[0]-1, num_samples)]
     return data[samples]
     
-def smooth_extractor(data, num_samples):
-    """
-    Samples a signal after smoothing it.
-
-    data = 1d-numpy array of length timestep
-    num_samples = how many samples to extract
-    """
-    smoothed = smooth(data,200,50)
-    smax = np.max(smoothed)
-    if smax == 0:
-        smax = 0.00001
-    normalized = (smoothed-np.mean(smoothed))/smax
-    return sample(normalized, num_samples)
-
-def variance_extractor(data, num_samples):
-    """
-    Samples the local variance of a signal.
-
-    data = 1d-numpy array of length timesteps
-    num_samples = how many samples to extract
-    """
-    var_data = smooth(variance_filter(data,windowsize=100),windowsize=100,std=25)
-    return sample(var_data, num_samples)
-
 
 def recurrent_feature_extractor(data, num_samples):
     """
@@ -96,6 +69,36 @@ def recurrent_feature_extractor(data, num_samples):
     data = 2d-numpy array of shape [timesteps, sensors]
     num_samples = how many samples to extract
     """
+
+    def smooth_extractor(data, num_samples):
+        """
+        Samples a signal after smoothing it.
+
+        data = 1d-numpy array of length timestep
+        num_samples = how many samples to extract
+        """
+        smoothed = smooth(data,200,50)
+        smax = np.max(smoothed)
+        if smax == 0:
+            smax = 0.00001
+        normalized = (smoothed-np.mean(smoothed))/smax
+        return sample(normalized, num_samples)
+
+    def variance_extractor(data, num_samples):
+        """
+        Samples the local variance of a signal.
+
+        data = 1d-numpy array of length timesteps
+        num_samples = how many samples to extract
+        """
+        var_data = variance_filter(data,windowsize=100)
+        vmax = np.max(var_data)
+        if(vmax == 0):
+            vmax = 0.00001
+        var_data = (var_data - np.mean(var_data))/vmax
+        return sample(var_data, num_samples)
+
+
     features = []
         
     for sensor in variance_sensors:
@@ -143,6 +146,58 @@ def threaded_recurrent_feature_extractor(data, num_samples):
     
     return var_results + smo_results
 
+
+
+def old_feature_extractor(data, num_samples):
+    """
+    I wrote a new version of this, but apparently the extracted features were worse, so...
+    """
+
+    def old_variance_extractor(data, num_samples):
+        """
+        Samples the local variance of a signal.
+        Differences: variance-data is smoothed, and it is not normalized to the mean, only divided by the max
+
+        data = 1d-numpy array of length timesteps
+        num_samples = how many samples to extract
+        """
+        var_data = smooth(variance_filter(data,windowsize=100), windowsize=100, std=25)
+        vmax = np.max(var_data)
+        if(vmax == 0):
+            vmax = 0.00001
+        var_data = var_data/vmax
+        return sample(var_data, num_samples)
+
+    def old_smooth_extractor(data, num_samples):
+        """
+        Samples a signal after smoothing it.
+
+        data = 1d-numpy array of length timestep
+        num_samples = how many samples to extract
+        """
+        smoothed = smooth(data,200,50)
+        smax = np.max(smoothed)
+        if smax == 0:
+            smax = 0.00001
+        normalized = smoothed/smax
+        return sample(normalized, num_samples)
+
+    features = []
+        
+    for sensor in variance_sensors:
+        features.append(old_variance_extractor(data[:,sensors.index(sensor)], num_samples))
+        
+    if(np.isnan(np.array(features)).any()):
+        raise ValueError("Error in variance")
+        
+    for sensor in smooth_sensors:
+        features.append(old_smooth_extractor(data[:,sensors.index(sensor)], num_samples))
+        
+    if(np.isnan(np.array(features)).any()):
+        raise ValueError("Error in smooth")
+        
+    return features
+
 def split_dataset(file, train_name, test_name, percentage=10):
     """
     Splits the file that contains the original dataset in two files, one for training and one for testing.
@@ -174,7 +229,7 @@ def _int64_feature(value):
     """Returns an int64_list from a bool / enum / int / uint."""
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
-def serialize_example(featurelist, label):
+def serialize_example(featurelist, label, id, subject):
     """
     Creates a tf.Example message from the list of features and the label, where
     every element in the featurelist is actually a sequence=ndarray
@@ -185,17 +240,19 @@ def serialize_example(featurelist, label):
         feature['feature'+str(i)] = tf.train.Feature(float_list=tf.train.FloatList(value=list(featurelist[i])))
         #_float_feature(featurelist[i])
     feature['label'] = _int64_feature(label)
+    feature['subject'] = _int64_feature(subject)
+    feature['id'] = _int64_feature(id)
 
     example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
     return example_proto.SerializeToString()
 
 
-def dataset_creator(in_file, outfile):
+def dataset_creator(in_file, outfile, feature_extractor):
     """
     Creates a dataset (i.e. outfile.tfrecords) from in_file.csv
     """
     df = pd.read_csv(in_file)
-    
+    id = 0
     with tf.python_io.TFRecordWriter(outfile+".tfrecords") as writer:
         
         for index, row in df.iterrows():
@@ -206,8 +263,124 @@ def dataset_creator(in_file, outfile):
                 data = pd.read_csv(data_path+path).values
 
                 label = classes.index(row['Label'])
-                extracted_featurelist = recurrent_feature_extractor(data, 80)
+                subject = int(row['Subject'][-2:])
+                
+                extracted_featurelist = feature_extractor(data, 80)
 
-                serialized_example = serialize_example(extracted_featurelist, label)
-
+                serialized_example = serialize_example(extracted_featurelist, label, id, subject)
+                id = id + 1
                 writer.write(serialized_example)
+            else:
+                print(row['Label'],"not in known classes!")
+
+
+def challenge_dataset_creator(in_file, outfile, feature_extractor):
+    """
+    Creates a dataset (i.e. outfile.tfrecords) from in_file.csv
+    """
+    df = pd.read_csv(in_file)
+    id = 0
+    with tf.python_io.TFRecordWriter(outfile+".tfrecords") as writer:
+        
+        for index, row in df.iterrows():
+            if(index % 100 == 0):
+                print("Digesting",row['Datafile'])
+            path = row['Datafile']
+            data = pd.read_csv(data_path+path).values
+
+            subject = int(row['Subject'][-2:])
+            
+            extracted_featurelist = feature_extractor(data, 80)
+
+            serialized_example = serialize_example(extracted_featurelist, 0, id, subject)
+            id = id + 1
+            writer.write(serialized_example)
+
+
+
+def read_recurrent_dataset(path,
+                            sequence_length, 
+                            filter_subjects=None, 
+                            filter_ids=None,
+                            mode=None, 
+                            training=True,):
+    """
+    mode = whether to only yield elements that are in the lists or whether to ignore elements that are in the list
+    """
+    if not mode is None and mode in ['include', 'exclude']:
+        raise ValueError("Mode unknwon: Has to be 'include' or 'exclude'")
+
+    if not filter_subjects is None:
+        filter_subjects_tensor = tf.constant(filter_subjects, dtype=tf.int64)
+    if not filter_ids is None:
+        filter_ids_tensor = tf.constant(filter_ids, dtype=tf.int64)
+
+    features = {}
+    for i in range(19):
+        features['feature'+str(i)] = tf.FixedLenFeature([sequence_length], tf.float32, default_value=np.zeros((sequence_length)))
+    features['label'] = tf.FixedLenFeature([], tf.int64, default_value=0)
+    features['subject'] = tf.FixedLenFeature([], tf.int64, default_value=0)
+    features['id'] = tf.FixedLenFeature([], tf.int64, default_value=0)
+
+    def _parse_function(example_proto):
+
+        parsed_features = tf.parse_single_example(example_proto, features)
+
+        data = []
+        for i in range(19):
+            data.append(parsed_features['feature'+str(i)])
+
+        return tf.reshape(data, (sequence_length,19)), tf.one_hot(parsed_features['label'],22)
+
+    def _filter_by_subjects(example_proto):
+
+        parsed_features = tf.parse_single_example(example_proto, features)
+        subject = parsed_features['subject']
+
+        if(mode == 'exclude'):
+            #return not subject in filter_subjects
+            return tf.logical_not(tf.reduce_any(tf.equal(subject,filter_subjects_tensor), axis=0))
+        else:
+            #return subject in filter_subjects
+            return tf.reduce_any(tf.equal(subject,filter_subjects_tensor), axis=0)
+
+    def _filter_by_ids(example_proto):
+
+        parsed_features = tf.parse_single_example(example_proto, features)
+        id = parsed_features['id']
+
+        if(mode == 'exclude'):
+            #return not id in filter_ids
+            return tf.logical_not(tf.reduce_any(tf.equal(id,filter_ids_tensor), axis=0))
+        else: 
+            # mode == include, return id in filter_ids
+            return tf.reduce_any(tf.equal(id,filter_ids_tensor), axis=0)
+
+    dataset = tf.data.TFRecordDataset(path)
+    if not filter_subjects is None:
+        dataset = dataset.filter(_filter_by_subjects)
+    if not filter_ids is None:
+        dataset = dataset.filter(_filter_by_ids)
+    dataset = dataset.map(_parse_function)
+    if training:
+        dataset = dataset.shuffle(1000)
+        dataset = dataset.batch(32, drop_remainder=True)
+    else:
+        dataset = dataset.batch(1, drop_remainder=False)
+    #dataset = dataset.prefetch(1)
+    dataset = dataset.repeat()
+    return dataset 
+
+if __name__ == "__main__":
+    dataset_creator(data_path+"train.csv",
+                "./data/hybrid/rawdata", recurrent_feature_extractor)
+#     tf.enable_eager_execution()
+
+#     np.random.seed(42)
+#     #indices = np.random.randint(0, 6384, 638)
+#     indices = np.arange(0,96)
+#     ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/rawdata.tfrecords", 80, filter_ids=indices, mode='include')
+
+#     res = ds.take(10)
+#     for r in res:
+#         print(r)
