@@ -1,2 +1,0 @@
-model_checkpoint_path: "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/models/checkpoints/FaquarlV3train.ckpt"
-all_model_checkpoint_paths: "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/models/checkpoints/FaquarlV3train.ckpt"

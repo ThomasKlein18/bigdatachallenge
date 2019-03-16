@@ -78,11 +78,7 @@ def recurrent_feature_extractor(data, num_samples):
         num_samples = how many samples to extract
         """
         smoothed = smooth(data,200,50)
-        smax = np.max(smoothed)
-        if smax == 0:
-            smax = 0.00001
-        normalized = (smoothed-np.mean(smoothed))/smax
-        return sample(normalized, num_samples)
+        return sample(smoothed, num_samples)
 
     def variance_extractor(data, num_samples):
         """
@@ -92,10 +88,6 @@ def recurrent_feature_extractor(data, num_samples):
         num_samples = how many samples to extract
         """
         var_data = variance_filter(data,windowsize=100)
-        vmax = np.max(var_data)
-        if(vmax == 0):
-            vmax = 0.00001
-        var_data = (var_data - np.mean(var_data))/vmax
         return sample(var_data, num_samples)
 
 
@@ -247,7 +239,7 @@ def serialize_example(featurelist, label, id, subject):
     return example_proto.SerializeToString()
 
 
-def dataset_creator(in_file, outfile, feature_extractor):
+def dataset_creator(in_file, outfile, feature_extractor, *args):
     """
     Creates a dataset (i.e. outfile.tfrecords) from in_file.csv
     """
@@ -264,8 +256,7 @@ def dataset_creator(in_file, outfile, feature_extractor):
 
                 label = classes.index(row['Label'])
                 subject = int(row['Subject'][-2:])
-                
-                extracted_featurelist = feature_extractor(data, 80)
+                extracted_featurelist = feature_extractor(data, args[0])
 
                 serialized_example = serialize_example(extracted_featurelist, label, id, subject)
                 id = id + 1
@@ -274,7 +265,7 @@ def dataset_creator(in_file, outfile, feature_extractor):
                 print(row['Label'],"not in known classes!")
 
 
-def challenge_dataset_creator(in_file, outfile, feature_extractor):
+def challenge_dataset_creator(in_file, outfile, feature_extractor, *args):
     """
     Creates a dataset (i.e. outfile.tfrecords) from in_file.csv
     """
@@ -289,8 +280,7 @@ def challenge_dataset_creator(in_file, outfile, feature_extractor):
             data = pd.read_csv(data_path+path).values
 
             subject = int(row['Subject'][-2:])
-            
-            extracted_featurelist = feature_extractor(data, 80)
+            extracted_featurelist = feature_extractor(data, args[0])
 
             serialized_example = serialize_example(extracted_featurelist, 0, id, subject)
             id = id + 1
@@ -307,7 +297,7 @@ def read_recurrent_dataset(path,
     """
     mode = whether to only yield elements that are in the lists or whether to ignore elements that are in the list
     """
-    if not mode is None and mode in ['include', 'exclude']:
+    if not mode is None and not mode in ['include', 'exclude']:
         raise ValueError("Mode unknwon: Has to be 'include' or 'exclude'")
 
     if not filter_subjects is None:
@@ -322,6 +312,9 @@ def read_recurrent_dataset(path,
     features['subject'] = tf.FixedLenFeature([], tf.int64, default_value=0)
     features['id'] = tf.FixedLenFeature([], tf.int64, default_value=0)
 
+    global_means = tf.constant(np.load("global_means.npy"), dtype=tf.float32)
+    global_vars = tf.constant(np.load("global_vars.npy"), dtype=tf.float32)
+
     def _parse_function(example_proto):
 
         parsed_features = tf.parse_single_example(example_proto, features)
@@ -330,7 +323,12 @@ def read_recurrent_dataset(path,
         for i in range(19):
             data.append(parsed_features['feature'+str(i)])
 
-        return tf.reshape(data, (sequence_length,19)), tf.one_hot(parsed_features['label'],22)
+        data = tf.reshape(data, (sequence_length,19))
+        # data 80, 19
+        data = data - global_means
+        data = data / global_vars
+
+        return data, tf.one_hot(parsed_features['label'],22)
 
     def _filter_by_subjects(example_proto):
 
@@ -356,6 +354,7 @@ def read_recurrent_dataset(path,
             # mode == include, return id in filter_ids
             return tf.reduce_any(tf.equal(id,filter_ids_tensor), axis=0)
 
+
     dataset = tf.data.TFRecordDataset(path)
     if not filter_subjects is None:
         dataset = dataset.filter(_filter_by_subjects)
@@ -371,16 +370,60 @@ def read_recurrent_dataset(path,
     dataset = dataset.repeat()
     return dataset 
 
+
+def get_partial_mean(data):
+    return np.mean(data, axis=0), data.shape[0]
+     
+def get_partial_variance(data):
+    return np.std(data, axis=0), data.shape[0]
+
+
+def global_info(directory):
+
+    from pathlib import Path
+
+    pathlist = Path(directory).glob('**/*.csv')
+    meanlist = []
+    varlist = []
+    weightlist = []
+    
+    for filename in pathlist:
+        if not "challenge.csv" in str(filename) and not "train.csv" in str(filename): 
+            data = pd.read_csv(filename).values
+            meanlist.append(np.mean(data, axis=0))
+            weightlist.append(data.shape[0])
+            varlist.append(np.std(data, axis=0))
+
+    means = np.array(meanlist)
+    vars = np.array(varlist)
+    weights = np.array(weightlist) / np.sum(weightlist)
+
+    weighted_means = (means.T * weights).T 
+    weighted_vars = (vars.T * weights).T 
+
+    print(weighted_means.shape)
+    print(weighted_vars.shape)
+
+    np.save("global_means.npy",np.sum(weighted_means, axis=0))
+    np.save("global_vars.npy",np.sum(weighted_vars, axis=0))
+
+
+
 if __name__ == "__main__":
-    dataset_creator(data_path+"train.csv",
-                "./data/hybrid/rawdata", recurrent_feature_extractor)
-#     tf.enable_eager_execution()
+    #global_info("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Bewegungsdaten/")
 
-#     np.random.seed(42)
-#     #indices = np.random.randint(0, 6384, 638)
-#     indices = np.arange(0,96)
-#     ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/rawdata.tfrecords", 80, filter_ids=indices, mode='include')
+    # dataset_creator(data_path+"train.csv",
+    #            "./data/raw/rawdata", recurrent_feature_extractor, 80)
 
-#     res = ds.take(10)
-#     for r in res:
-#         print(r)
+    # challenge_dataset_creator(data_path+"challenge.csv",
+    #            "./data/raw/rawchallenge", recurrent_feature_extractor, 80)
+    tf.enable_eager_execution()
+
+    np.random.seed(42)
+    #indices = np.random.randint(0, 6384, 638)
+    indices = np.arange(0,96)
+    ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/raw/rawdata.tfrecords", 80, filter_ids=indices, mode='include')
+
+    res = ds.take(10)
+    for r in res:
+        print(r)
