@@ -77,9 +77,13 @@ def recurrent_feature_extractor(data, num_samples):
         data = 1d-numpy array of length timestep
         num_samples = how many samples to extract
         """
-        smoothed = smooth(data,200,50)
+        smoothed = smooth(data,500,200)
+        sstd = np.std(smoothed)
+        if sstd == 0:
+            sstd = 0.00001
+        smoothed = (smoothed - np.mean(smoothed))/sstd
         return sample(smoothed, num_samples)
-
+    
     def variance_extractor(data, num_samples):
         """
         Samples the local variance of a signal.
@@ -87,7 +91,11 @@ def recurrent_feature_extractor(data, num_samples):
         data = 1d-numpy array of length timesteps
         num_samples = how many samples to extract
         """
-        var_data = variance_filter(data,windowsize=100)
+        var_data = smooth(variance_filter(data,windowsize=200), windowsize=5, std=0.8)
+        vstd = np.std(var_data)
+        if vstd == 0:
+            vstd = 0.00001
+        var_data = (var_data - np.mean(var_data))/vstd
         return sample(var_data, num_samples)
 
 
@@ -290,14 +298,19 @@ def challenge_dataset_creator(in_file, outfile, feature_extractor, *args):
 
 def read_recurrent_dataset(path,
                             sequence_length, 
+                            batchsize,
                             filter_subjects=None, 
                             filter_ids=None,
-                            mode=None, 
+                            id_mode=None, 
+                            sub_mode=None,
                             training=True,):
     """
     mode = whether to only yield elements that are in the lists or whether to ignore elements that are in the list
     """
-    if not mode is None and not mode in ['include', 'exclude']:
+    if not id_mode is None and not id_mode in ['include', 'exclude']:
+        raise ValueError("Mode unknwon: Has to be 'include' or 'exclude'")
+
+    if not sub_mode is None and not sub_mode in ['include', 'exclude']:
         raise ValueError("Mode unknwon: Has to be 'include' or 'exclude'")
 
     if not filter_subjects is None:
@@ -312,8 +325,8 @@ def read_recurrent_dataset(path,
     features['subject'] = tf.FixedLenFeature([], tf.int64, default_value=0)
     features['id'] = tf.FixedLenFeature([], tf.int64, default_value=0)
 
-    global_means = tf.constant(np.load("global_means.npy"), dtype=tf.float32)
-    global_vars = tf.constant(np.load("global_vars.npy"), dtype=tf.float32)
+    # global_means = tf.constant(np.load("global_means.npy"), dtype=tf.float32)
+    # global_vars = tf.constant(np.load("global_vars.npy"), dtype=tf.float32)
 
     def _parse_function(example_proto):
 
@@ -324,9 +337,9 @@ def read_recurrent_dataset(path,
             data.append(parsed_features['feature'+str(i)])
 
         data = tf.reshape(data, (sequence_length,19))
-        # data 80, 19
-        data = data - global_means
-        data = data / global_vars
+        # # data 80, 19
+        # data = data - global_means
+        # data = data / global_vars
 
         return data, tf.one_hot(parsed_features['label'],22)
 
@@ -335,7 +348,7 @@ def read_recurrent_dataset(path,
         parsed_features = tf.parse_single_example(example_proto, features)
         subject = parsed_features['subject']
 
-        if(mode == 'exclude'):
+        if(sub_mode == 'exclude'):
             #return not subject in filter_subjects
             return tf.logical_not(tf.reduce_any(tf.equal(subject,filter_subjects_tensor), axis=0))
         else:
@@ -347,25 +360,52 @@ def read_recurrent_dataset(path,
         parsed_features = tf.parse_single_example(example_proto, features)
         id = parsed_features['id']
 
-        if(mode == 'exclude'):
+        if(id_mode == 'exclude'):
             #return not id in filter_ids
             return tf.logical_not(tf.reduce_any(tf.equal(id,filter_ids_tensor), axis=0))
         else: 
             # mode == include, return id in filter_ids
             return tf.reduce_any(tf.equal(id,filter_ids_tensor), axis=0)
 
+    def _noise(example_proto):
+        parsed_features = tf.parse_single_example(example_proto, features)
+
+        data = []
+        for i in range(19):
+            data.append(parsed_features['feature'+str(i)])
+
+        data = tf.reshape(data, (sequence_length,19))
+        # data is of shape samples x sensors
+        means, vars = tf.nn.moments(data, axes=[0])
+        new_data = []
+        for i in range(19):
+            noise = tf.random.normal(shape=(sequence_length,1),
+                                        mean=0.0,
+                                        stddev=vars[i]*3.0,
+                                        dtype=tf.float32)
+            #print("noise:",noise)
+            #print("data:",data[:,i])
+            new_data.append(tf.reshape(data[:,i], [sequence_length, 1]) + noise)
+            #print("result:", tf.reshape(data[:,i], [sequence_length, 1]) + noise)
+
+        data = tf.stack(new_data, axis=1)
+        #print(data)
+
+        return tf.reshape(data, [sequence_length, 19]), tf.one_hot(parsed_features['label'],22)
 
     dataset = tf.data.TFRecordDataset(path)
+
     if not filter_subjects is None:
         dataset = dataset.filter(_filter_by_subjects)
     if not filter_ids is None:
         dataset = dataset.filter(_filter_by_ids)
-    dataset = dataset.map(_parse_function)
+        
     if training:
-        dataset = dataset.shuffle(1000)
-        dataset = dataset.batch(32, drop_remainder=True)
+        dataset=dataset.map(_noise)
     else:
-        dataset = dataset.batch(1, drop_remainder=False)
+        dataset = dataset.map(_parse_function)
+    dataset.shuffle(1000)
+    dataset = dataset.batch(batchsize, drop_remainder=training)
     #dataset = dataset.prefetch(1)
     dataset = dataset.repeat()
     return dataset 
@@ -412,18 +452,25 @@ def global_info(directory):
 if __name__ == "__main__":
     #global_info("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bbdc_2019_Bewegungsdaten/")
 
-    # dataset_creator(data_path+"train.csv",
-    #            "./data/raw/rawdata", recurrent_feature_extractor, 80)
+    dataset_creator(data_path+"train.csv",
+               "./data/sparse/rawdata", recurrent_feature_extractor, 80)
 
-    # challenge_dataset_creator(data_path+"challenge.csv",
-    #            "./data/raw/rawchallenge", recurrent_feature_extractor, 80)
-    tf.enable_eager_execution()
+    challenge_dataset_creator(data_path+"challenge.csv",
+               "./data/sparse/rawchallenge", recurrent_feature_extractor, 80)
+#     tf.enable_eager_execution()
 
-    np.random.seed(42)
-    #indices = np.random.randint(0, 6384, 638)
-    indices = np.arange(0,96)
-    ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/raw/rawdata.tfrecords", 80, filter_ids=indices, mode='include')
+#     np.random.seed(42)
+#     #indices = np.random.randint(0, 6384, 638)
+#     indices = np.arange(0,1)
+#     print(indices)
+#     ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/sparse/rawdata.tfrecords", 30, 1, filter_ids=indices, mode='include', training=True)
 
-    res = ds.take(10)
-    for r in res:
-        print(r)
+#     res = ds.take(1)
+#     for r in res:
+#         print(r)
+
+#     ds = read_recurrent_dataset("/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/sparse/rawdata.tfrecords", 30, 1, filter_ids=indices, mode='include', training=True)
+
+#     res = ds.take(1)
+#     for r in res:
+#         print(r)

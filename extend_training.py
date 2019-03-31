@@ -4,9 +4,9 @@ import tensorflow as tf
 from utils import *
 from tensorflow.keras import layers 
 
-name = "Bartimaeus"
+name = "big_ohne_r2"
 sequence_length = 80
-data = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/rawdata.tfrecords"
+data = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/sparse/rawdata.tfrecords"
 model_path = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/models/"
 archive_path = model_path + "model_archive/"
 

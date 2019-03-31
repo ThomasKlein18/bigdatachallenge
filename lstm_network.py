@@ -4,15 +4,16 @@ from utils import *
 from tensorflow.keras import layers 
 from models import *
 
-name = "RNN_ohne"
+name = "BigRandomAvoider"
 sequence_length = 80
-data = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/raw/rawdata.tfrecords"
+batchsize = 32
+data = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/bigdatachallenge/data/sparse/rawdata.tfrecords"
 model_path = "/Users/thomasklein/Projects/BremenBigDataChallenge2019/models/"
-archive_path = model_path + "model_archive/"
+archive_path = model_path + "model_archive/new_shit/"
 
-modus = 'full' 
+modus = 'train' 
 
-model = get_rnn(sequence_length, rec_units=32, drop1=0.0, dense_units=32, drop2=0.0)#get_bartimaeus(sequence_length, rec_units=80, drop1=0.0, dense_units=48, drop2=0.8)
+model = get_bartimaeus(sequence_length, rec_units=128, drop1=0.6, dense_units=64, drop2=0.4)#get_dwarf(sequence_length, rec_units=19, drop=0.35)
 
 model.compile(optimizer=tf.keras.optimizers.Adam(0.001),
               loss='categorical_crossentropy',
@@ -22,20 +23,21 @@ if modus == 'train':
 
     #np.random.seed(42)
     indices = np.random.randint(0, 6384, 638)
-    dataset = read_recurrent_dataset(data, sequence_length, filter_ids=indices, mode='exclude')
-    validation_set = read_recurrent_dataset(data, sequence_length, filter_ids=indices, mode='include')
+    avoided_subjects = [6,7]
+    dataset = read_recurrent_dataset(data, sequence_length, batchsize, filter_ids=indices, filter_subjects=avoided_subjects, id_mode='exclude', sub_mode='exclude', training=True)
+    validation_set = read_recurrent_dataset(data, sequence_length, batchsize, filter_ids=indices, filter_subjects=avoided_subjects, id_mode='include', sub_mode='exclude', training=False)
 
-elif modus == 'subject_train':
+# elif modus == 'subject_train':
 
-    indices = [18,19]
-    dataset = read_recurrent_dataset(data, sequence_length, filter_subjects=indices, mode='exclude')
-    validation_set = read_recurrent_dataset(data, sequence_length, filter_subjects=indices, mode='include')
+#     indices = [18,19]
+#     dataset = read_recurrent_dataset(data, sequence_length, batchsize, filter_subjects=indices, mode='exclude', training=True)
+#     validation_set = read_recurrent_dataset(data, sequence_length, batchsize, filter_subjects=indices, mode='include', training=False)
 
 
-elif modus == 'full':
+# elif modus == 'full':
 
-    dataset = read_recurrent_dataset(data, sequence_length)
-    validation_set = dataset
+#     dataset = read_recurrent_dataset(data, sequence_length, batchsize, training=True)
+#     validation_set = read_recurrent_dataset(data, sequence_length, batchsize, training=False)
 
 
 callbacks = [
@@ -48,10 +50,10 @@ tf.keras.callbacks.ModelCheckpoint(filepath=archive_path+name+"_"+modus+"/"+name
 
 
 model.fit(x=dataset, 
-        epochs=85,
-        steps_per_epoch=6384//32,
+        epochs=150,
+        steps_per_epoch=6384//batchsize,
         validation_data=validation_set,
-        validation_steps=638//32,
+        validation_steps=638//batchsize,
         callbacks = callbacks)
 
 #tf.keras.models.save_model(model,archive_path+name+"_"+modus+"/"+name+"_"+modus+".h5",overwrite=False)
